@@ -1,5 +1,6 @@
 #include "InspectActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 
 AInspectActor::AInspectActor()
 {
@@ -18,12 +19,45 @@ AInspectActor::AInspectActor()
     TargetRotation = FQuat::Identity;
 }
 
+// Новая функция: запоминаем, где предмет появился
+// New function: remember where the item spawned
+void AInspectActor::BeginPlay()
+{
+    Super::BeginPlay();
+    BaseLocation = GetActorLocation();
+}
+
+void AInspectActor::SetupFromComponent(UStaticMeshComponent* Source)
+{
+    if (!Source || !Source->GetStaticMesh())
+    {
+        return;
+    }
+
+    UStaticMesh* SM = Source->GetStaticMesh();
+    Mesh->SetStaticMesh(SM);
+
+    // Копируем материалы с предмета в мире // Copy materials from the world item
+    for (int32 i = 0; i < Source->GetNumMaterials(); ++i)
+    {
+        Mesh->SetMaterial(i, Source->GetMaterial(i));
+    }
+
+    // Подгоняем размер, чтобы любой предмет был одного размера в руках
+    // Fit the size so any item looks the same size in hands
+    const FBoxSphereBounds B = SM->GetBounds();
+    const float Scale = (B.SphereRadius > KINDA_SMALL_NUMBER) ? TargetRadius / B.SphereRadius : 1.f;
+
+    Mesh->SetRelativeScale3D(FVector(Scale));
+    // Центрируем, чтобы крутился вокруг своей середины // Center it to rotate around its middle
+    Mesh->SetRelativeLocation(-B.Origin * Scale);
+}
+
 void AInspectActor::SetMesh(UStaticMesh* NewMesh)
 {
     Mesh->SetStaticMesh(NewMesh);
 
-    // Центрируем меш по его bounds, чтобы он крутился вокруг своего центра
-    // Center the mesh based on its bounds so that it rotates around its center
+    // Центрируем меш по его bounds // Center the mesh based on its bounds
     const FVector Center = Mesh->Bounds.Origin - Mesh->GetComponentLocation();
     Mesh->SetRelativeLocation(-Center);
 }
@@ -42,12 +76,7 @@ void AInspectActor::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
 
-    // 1. Превращаем ввод в поворот.
-    //    Ось Yaw — мировая "вверх" (Z), ось Pitch — "вправо" относительно камеры.
-    //    Камера смотрит по +X, поэтому "вправо" для неё это +Y.
-    // 1. Convert input into a rotation. 
-    //    The Yaw axis is the world "up" (Z), and the Pitch axis is "to the right" relative to the camera. 
-    //    The camera faces along +X, so "to the right" from its perspective is +Y.
+    // 1. Превращаем ввод в поворот // 1. Convert input into a rotation
     const float YawDeg = -PendingInput.X * RotationSpeed * DeltaSeconds;
     const float PitchDeg = PendingInput.Y * RotationSpeed * DeltaSeconds;
     PendingInput = FVector2D::ZeroVector;
@@ -55,21 +84,17 @@ void AInspectActor::Tick(float DeltaSeconds)
     const FQuat YawQuat(FVector::UpVector, FMath::DegreesToRadians(YawDeg));
     const FQuat PitchQuat(FVector::RightVector, FMath::DegreesToRadians(PitchDeg));
 
-    // Порядок важен: новые повороты умножаются СЛЕВА, т.е. применяются в мировых осях.
-    // Order matters: new rotations are multiplied from the LEFT, i.e., they are applied in world-space axes.
+    // Новые повороты умножаются слева // New rotations are multiplied from the left
     TargetRotation = YawQuat * PitchQuat * TargetRotation;
     TargetRotation.Normalize();
 
-    // 2. Плавно догоняем целевой поворот
-    // 2. Smoothly catch up to the target rotation
+    // 2. Плавно догоняем целевой поворот // 2. Smoothly catch up to the target rotation
     const FQuat Current = Pivot->GetRelativeRotation().Quaternion();
     const FQuat NewRot = FQuat::Slerp(Current, TargetRotation,
         FMath::Clamp(DeltaSeconds * RotationInterpSpeed, 0.f, 1.f));
     Pivot->SetRelativeRotation(NewRot);
 
-    // 3. Зум (двигаем актор вдоль оси к камере)
-    // 3. Zoom (move the actor along the axis toward the camera)
-    FVector Loc = Root->GetRelativeLocation();
-    Loc.X = FMath::FInterpTo(Loc.X, TargetZoom, DeltaSeconds, 10.f);
-    Root->SetRelativeLocation(Loc);
+    // 3. Зум вдоль взгляда камеры // 3. Zoom along the camera view direction
+    CurrentZoom = FMath::FInterpTo(CurrentZoom, TargetZoom, DeltaSeconds, 10.f);
+    SetActorLocation(BaseLocation + GetActorForwardVector() * CurrentZoom);
 }

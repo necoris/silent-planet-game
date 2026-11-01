@@ -15,6 +15,8 @@
 #include "silent_planet.h"
 #include "InspectActor.h"
 #include "Widgets/Input/SVirtualJoystick.h"
+#include "InspectableItem.h"
+#include "Components/StaticMeshComponent.h"
 
 Asilent_planetPlayerController::Asilent_planetPlayerController()
 {
@@ -84,6 +86,15 @@ void Asilent_planetPlayerController::SetupInputComponent()
 			{
 				EIC->BindAction(ZoomAction, ETriggerEvent::Triggered, this, &Asilent_planetPlayerController::OnZoomInput);
 			}
+			// Кнопки "в инвентарь" и "вернуть" // "To inventory" and "put back" buttons
+			if (TakeAction)
+			{
+				EIC->BindAction(TakeAction, ETriggerEvent::Started, this, &Asilent_planetPlayerController::OnTakePressed);
+			}
+			if (CancelAction)
+			{
+				EIC->BindAction(CancelAction, ETriggerEvent::Started, this, &Asilent_planetPlayerController::OnCancelPressed);
+			}
 		}
 	}
 
@@ -102,12 +113,14 @@ void Asilent_planetPlayerController::StartInspect(UStaticMesh* ItemMesh)
 		return;
 	}
 
-	// Ставим предмет перед камерой
+	// Ставим предмет перед камерой на InspectDistance // Place the item in front of the camera at InspectDistance
 	const FVector SpawnLoc = PlayerCameraManager->GetCameraLocation()
-		+ PlayerCameraManager->GetCameraRotation().Vector() * 80.f;
+		+ PlayerCameraManager->GetCameraRotation().Vector() * InspectDistance;
 
 	FActorSpawnParameters Params;
-	InspectActor = GetWorld()->SpawnActor<AInspectActor>(InspectActorClass, SpawnLoc, FRotator::ZeroRotator, Params);
+	// Поворот по камере, чтобы мышь крутила предмет правильно // Rotate by camera so mouse rotation feels correct
+	InspectActor = GetWorld()->SpawnActor<AInspectActor>(InspectActorClass, SpawnLoc, PlayerCameraManager->GetCameraRotation(), Params);
+
 	if (!InspectActor)
 	{
 		return;
@@ -128,16 +141,124 @@ void Asilent_planetPlayerController::StartInspect(UStaticMesh* ItemMesh)
 	}
 }
 
+void Asilent_planetPlayerController::Interact()
+{
+	// Пока осматриваем, E ничего не делает // While inspecting, E does nothing
+	if (InspectActor)
+	{
+		return;
+	}
+
+	FVector Loc;
+	FRotator Rot;
+	GetPlayerViewPoint(Loc, Rot);
+
+	FHitResult Hit;
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(GetPawn());
+
+	if (GetWorld()->LineTraceSingleByChannel(Hit, Loc, Loc + Rot.Vector() * InteractDistance, ECC_Visibility, Params))
+	{
+		if (AInspectableItem* Item = Cast<AInspectableItem>(Hit.GetActor()))
+		{
+			StartInspectItem(Item);
+		}
+	}
+}
+
+void Asilent_planetPlayerController::StartInspectItem(AInspectableItem* Item)
+{
+	if (InspectActor || !InspectActorClass || !Item)
+	{
+		return;
+	}
+
+	// Ставим предмет перед камерой на InspectDistance // Place the item in front of the camera at InspectDistance
+	const FVector SpawnLoc = PlayerCameraManager->GetCameraLocation()
+		+ PlayerCameraManager->GetCameraRotation().Vector() * InspectDistance;
+
+	FActorSpawnParameters Params;
+	// Поворот по камере, чтобы мышь крутила предмет правильно // Rotate by camera so mouse rotation feels correct
+	InspectActor = GetWorld()->SpawnActor<AInspectActor>(InspectActorClass, SpawnLoc, PlayerCameraManager->GetCameraRotation(), Params);
+
+	if (!InspectActor)
+	{
+		return;
+	}
+	InspectActor->SetupFromComponent(Item->Mesh);
+
+	// Прячем предмет в мире
+	HeldItem = Item;
+	HeldItem->SetHeldState(true);
+
+	SetIgnoreMoveInput(true);
+	SetIgnoreLookInput(true);
+
+	if (UEnhancedInputLocalPlayerSubsystem* Sub =
+		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
+	{
+		if (InspectMappingContext)
+		{
+			Sub->AddMappingContext(InspectMappingContext, 10);
+		}
+	}
+
+	OnInspectStarted(Item->ItemName, Item->ItemDescription);
+}
+
 void Asilent_planetPlayerController::EndInspect()
+{
+	// Esc: вернуть предмет на место // Esc: put the item back in place
+	CloseInspect(false);
+}
+
+void Asilent_planetPlayerController::TakeToInventory()
+{
+	// I: забрать предмет в инвентарь // I: take the item into the inventory
+	CloseInspect(true);
+}
+
+void Asilent_planetPlayerController::OnTakePressed()
+{
+	TakeToInventory();
+}
+
+void Asilent_planetPlayerController::OnCancelPressed()
+{
+	EndInspect();
+}
+
+void Asilent_planetPlayerController::CloseInspect(bool bToInventory)
 {
 	if (!InspectActor)
 	{
 		return;
 	}
 
+	// Убираем копию из рук // Remove the copy from hands
 	InspectActor->Destroy();
 	InspectActor = nullptr;
 
+	if (HeldItem)
+	{
+		if (bToInventory)
+		{
+			// Запоминаем в инвентаре и убираем предмет из мира
+			// Store it in the inventory and remove the item from the world
+			InventoryItems.Add(HeldItem->GetClass());
+			OnItemTakenToInventory(HeldItem->ItemName);
+			HeldItem->Destroy();
+		}
+		else
+		{
+			// Предмет просто становится видимым на прежнем месте
+			// The item just becomes visible again at its old place
+			HeldItem->SetHeldState(false);
+		}
+		HeldItem = nullptr;
+	}
+
+	// Возвращаем управление персонажем // Give control back to the character
 	SetIgnoreMoveInput(false);
 	SetIgnoreLookInput(false);
 
@@ -149,6 +270,8 @@ void Asilent_planetPlayerController::EndInspect()
 			Sub->RemoveMappingContext(InspectMappingContext);
 		}
 	}
+
+	OnInspectEnded();
 }
 
 void Asilent_planetPlayerController::OnInspectInput(const FInputActionValue& Value)
@@ -163,6 +286,7 @@ void Asilent_planetPlayerController::OnZoomInput(const FInputActionValue& Value)
 {
 	if (InspectActor)
 	{
-		InspectActor->AddZoomInput(Value.Get<float>());
+		// Минус меняет направление зума // The minus flips the zoom direction
+		InspectActor->AddZoomInput(-Value.Get<float>());
 	}
 }
