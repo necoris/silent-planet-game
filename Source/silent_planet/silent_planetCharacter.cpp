@@ -7,6 +7,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "InputActionValue.h"
+#include "InputAction.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "silent_planet.h"
 
@@ -14,7 +15,7 @@ Asilent_planetCharacter::Asilent_planetCharacter()
 {
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
-	
+
 	// Create the first person mesh that will be viewed only by this character's owner
 	FirstPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("First Person Mesh"));
 
@@ -45,7 +46,7 @@ Asilent_planetCharacter::Asilent_planetCharacter()
 }
 
 void Asilent_planetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{	
+{
 	// Set up action bindings
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
@@ -59,6 +60,14 @@ void Asilent_planetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerI
 		// Looking/Aiming
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &Asilent_planetCharacter::LookInput);
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &Asilent_planetCharacter::LookInput);
+
+		// Бег: начало и конец нажатия Shift // Run: start and end of Shift press
+		if (RunAction)
+		{
+			EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Started, this, &Asilent_planetCharacter::StartRun);
+			EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Completed, this, &Asilent_planetCharacter::StopRun);
+			EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Canceled, this, &Asilent_planetCharacter::StopRun);
+		}
 	}
 	else
 	{
@@ -66,6 +75,30 @@ void Asilent_planetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerI
 	}
 }
 
+void Asilent_planetCharacter::StartRun()
+{
+	if (bIsRunning)
+	{
+		return;
+	}
+
+	// Запоминаем обычную скорость и ускоряемся // Remember normal speed and speed up
+	NormalWalkSpeed = GetCharacterMovement()->MaxWalkSpeed;
+	GetCharacterMovement()->MaxWalkSpeed = NormalWalkSpeed * RunSpeedMultiplier;
+	bIsRunning = true;
+}
+
+void Asilent_planetCharacter::StopRun()
+{
+	if (!bIsRunning)
+	{
+		return;
+	}
+
+	// Возвращаем обычную скорость // Restore normal speed
+	GetCharacterMovement()->MaxWalkSpeed = NormalWalkSpeed;
+	bIsRunning = false;
+}
 
 void Asilent_planetCharacter::MoveInput(const FInputActionValue& Value)
 {
