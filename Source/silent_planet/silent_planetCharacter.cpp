@@ -9,6 +9,7 @@
 #include "InputActionValue.h"
 #include "InputAction.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "StealthComponent.h"
 #include "silent_planet.h"
 
 Asilent_planetCharacter::Asilent_planetCharacter()
@@ -33,6 +34,9 @@ Asilent_planetCharacter::Asilent_planetCharacter()
 	FirstPersonCameraComponent->bEnableFirstPersonScale = true;
 	FirstPersonCameraComponent->FirstPersonFieldOfView = 70.0f;
 	FirstPersonCameraComponent->FirstPersonScale = 0.6f;
+
+	// Компонент стелса // Stealth component
+	StealthComponent = CreateDefaultSubobject<UStealthComponent>(TEXT("Stealth Component"));
 
 	// configure the character comps
 	GetMesh()->SetOwnerNoSee(true);
@@ -68,6 +72,12 @@ void Asilent_planetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerI
 			EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Completed, this, &Asilent_planetCharacter::StopRun);
 			EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Canceled, this, &Asilent_planetCharacter::StopRun);
 		}
+
+		// Стелс: компонент сам привязывает свои клавиши // Stealth: the component binds its own keys
+		if (StealthComponent)
+		{
+			StealthComponent->SetupInput(EnhancedInputComponent);
+		}
 	}
 	else
 	{
@@ -80,6 +90,13 @@ void Asilent_planetCharacter::StartRun()
 	if (bIsRunning)
 	{
 		return;
+	}
+
+	// Бежать пригнувшись или лёжа нельзя: сначала встаём
+	// Can't run while crouched or prone: stand up first
+	if (StealthComponent && StealthComponent->GetStance() != EStealthStance::Standing)
+	{
+		StealthComponent->StandUp();
 	}
 
 	// Запоминаем обычную скорость и ускоряемся // Remember normal speed and speed up
