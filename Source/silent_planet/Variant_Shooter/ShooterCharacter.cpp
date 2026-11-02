@@ -13,6 +13,7 @@
 #include "Camera/CameraComponent.h"
 #include "TimerManager.h"
 #include "ShooterGameMode.h"
+#include "silent_planetPlayerController.h"
 
 AShooterCharacter::AShooterCharacter()
 {
@@ -121,6 +122,16 @@ void AShooterCharacter::DoJumpEnd()
 
 void AShooterCharacter::DoStartFiring()
 {
+	// Пока осматриваем предмет, стрелять нельзя
+	// No shooting while an item is being inspected
+	if (const Asilent_planetPlayerController* PC = Cast<Asilent_planetPlayerController>(GetController()))
+	{
+		if (PC->IsInspecting())
+		{
+			return;
+		}
+	}
+
 	// fire the current weapon
 	if (CurrentWeapon && !IsDead())
 	{
@@ -139,6 +150,16 @@ void AShooterCharacter::DoStopFiring()
 
 void AShooterCharacter::DoSwitchWeapon()
 {
+	// Пока осматриваем предмет, оружие не меняем
+	// Don't switch weapons while inspecting an item
+	if (const Asilent_planetPlayerController* PC = Cast<Asilent_planetPlayerController>(GetController()))
+	{
+		if (PC->IsInspecting())
+		{
+			return;
+		}
+	}
+
 	// ensure we have at least two weapons two switch between
 	if (OwnedWeapons.Num() > 1 && !IsDead())
 	{

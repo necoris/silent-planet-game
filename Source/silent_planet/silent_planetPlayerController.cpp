@@ -16,12 +16,24 @@
 #include "InspectActor.h"
 #include "Widgets/Input/SVirtualJoystick.h"
 #include "InspectableItem.h"
+#include "ShooterPickup.h"
 #include "Components/StaticMeshComponent.h"
+
+// Склеить описание и подсказку в один текст // Join the description and the hint into one text
+static FText MakeInspectText(const FText& Description, const FText& Hint)
+{
+	return FText::Format(INVTEXT("{0}\n\n{1}"), Description, Hint);
+}
 
 Asilent_planetPlayerController::Asilent_planetPlayerController()
 {
 	// set the player camera manager class
 	PlayerCameraManagerClass = Asilent_planetCameraManager::StaticClass();
+
+	// Подсказки по умолчанию, свои текст задаётся в редакторе
+	// Default hints, set your own text in the editor
+	ItemHintText = INVTEXT("[I] Put in inventory   [F] Put back");
+	WeaponHintText = INVTEXT("[E] Take in hands   [F] Put back");
 }
 
 void Asilent_planetPlayerController::BeginPlay()
@@ -75,7 +87,7 @@ void Asilent_planetPlayerController::SetupInputComponent()
 			}
 		}
 
-		// Привязка ввода для осмотра предметов
+		// Привязка ввода для осмотра предметов // Input bindings for item inspection
 		if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent))
 		{
 			if (InspectAction)
@@ -106,46 +118,16 @@ bool Asilent_planetPlayerController::ShouldUseTouchControls() const
 	return SVirtualJoystick::ShouldDisplayTouchInterface() || bForceTouchControls;
 }
 
-void Asilent_planetPlayerController::StartInspect(UStaticMesh* ItemMesh)
-{
-	if (InspectActor || !InspectActorClass || !ItemMesh)
-	{
-		return;
-	}
-
-	// Ставим предмет перед камерой на InspectDistance // Place the item in front of the camera at InspectDistance
-	const FVector SpawnLoc = PlayerCameraManager->GetCameraLocation()
-		+ PlayerCameraManager->GetCameraRotation().Vector() * InspectDistance;
-
-	FActorSpawnParameters Params;
-	// Поворот по камере, чтобы мышь крутила предмет правильно // Rotate by camera so mouse rotation feels correct
-	InspectActor = GetWorld()->SpawnActor<AInspectActor>(InspectActorClass, SpawnLoc, PlayerCameraManager->GetCameraRotation(), Params);
-
-	if (!InspectActor)
-	{
-		return;
-	}
-	InspectActor->SetMesh(ItemMesh);
-
-	// Отключаем обычное управление персонажем
-	SetIgnoreMoveInput(true);
-	SetIgnoreLookInput(true);
-
-	if (UEnhancedInputLocalPlayerSubsystem* Sub =
-		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-	{
-		if (InspectMappingContext)
-		{
-			Sub->AddMappingContext(InspectMappingContext, 10);
-		}
-	}
-}
-
 void Asilent_planetPlayerController::Interact()
 {
-	// Пока осматриваем, E ничего не делает // While inspecting, E does nothing
+	// Уже осматриваем: E подтверждает только оружие, обычные предметы не трогает
+	// Already inspecting: E only confirms a weapon, regular items are not affected
 	if (InspectActor)
 	{
+		if (HeldPickup)
+		{
+			ConfirmPickup();
+		}
 		return;
 	}
 
@@ -159,18 +141,26 @@ void Asilent_planetPlayerController::Interact()
 
 	if (GetWorld()->LineTraceSingleByChannel(Hit, Loc, Loc + Rot.Vector() * InteractDistance, ECC_Visibility, Params))
 	{
-		if (AInspectableItem* Item = Cast<AInspectableItem>(Hit.GetActor()))
+		AActor* HitActor = Hit.GetActor();
+
+		if (AInspectableItem* Item = Cast<AInspectableItem>(HitActor))
 		{
+			// Предмет для осмотра // Item to inspect
 			StartInspectItem(Item);
+		}
+		else if (AShooterPickup* Pickup = Cast<AShooterPickup>(HitActor))
+		{
+			// Оружие на стойке: сначала осматриваем // Weapon on a stand: inspect it first
+			StartInspectPickup(Pickup);
 		}
 	}
 }
 
-void Asilent_planetPlayerController::StartInspectItem(AInspectableItem* Item)
+bool Asilent_planetPlayerController::BeginInspect(UStaticMeshComponent* SourceMesh)
 {
-	if (InspectActor || !InspectActorClass || !Item)
+	if (InspectActor || !InspectActorClass || !SourceMesh)
 	{
-		return;
+		return false;
 	}
 
 	// Ставим предмет перед камерой на InspectDistance // Place the item in front of the camera at InspectDistance
@@ -183,14 +173,11 @@ void Asilent_planetPlayerController::StartInspectItem(AInspectableItem* Item)
 
 	if (!InspectActor)
 	{
-		return;
+		return false;
 	}
-	InspectActor->SetupFromComponent(Item->Mesh);
+	InspectActor->SetupFromComponent(SourceMesh);
 
-	// Прячем предмет в мире
-	HeldItem = Item;
-	HeldItem->SetHeldState(true);
-
+	// Отключаем обычное управление персонажем // Disable normal character control
 	SetIgnoreMoveInput(true);
 	SetIgnoreLookInput(true);
 
@@ -203,12 +190,86 @@ void Asilent_planetPlayerController::StartInspectItem(AInspectableItem* Item)
 		}
 	}
 
-	OnInspectStarted(Item->ItemName, Item->ItemDescription);
+	return true;
+}
+
+void Asilent_planetPlayerController::FinishInspect()
+{
+	// Убираем копию из рук // Remove the copy from hands
+	if (InspectActor)
+	{
+		InspectActor->Destroy();
+		InspectActor = nullptr;
+	}
+
+	// Возвращаем управление персонажем // Give control back to the character
+	SetIgnoreMoveInput(false);
+	SetIgnoreLookInput(false);
+
+	if (UEnhancedInputLocalPlayerSubsystem* Sub =
+		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
+	{
+		if (InspectMappingContext)
+		{
+			Sub->RemoveMappingContext(InspectMappingContext);
+		}
+	}
+
+	OnInspectEnded();
+}
+
+void Asilent_planetPlayerController::StartInspectItem(AInspectableItem* Item)
+{
+	if (!Item || !BeginInspect(Item->Mesh))
+	{
+		return;
+	}
+
+	// Прячем предмет в мире // Hide the item in the world
+	HeldItem = Item;
+	HeldItem->SetHeldState(true);
+
+	OnInspectStarted(Item->ItemName, MakeInspectText(Item->ItemDescription, ItemHintText));
+}
+
+void Asilent_planetPlayerController::StartInspectPickup(AShooterPickup* Pickup)
+{
+	if (!Pickup || !BeginInspect(Pickup->GetPickupMesh()))
+	{
+		return;
+	}
+
+	// Убираем оружие со стойки, пока его крутят // Take the weapon off the stand while it is inspected
+	HeldPickup = Pickup;
+	HeldPickup->SetHeldState(true);
+
+	OnInspectStarted(Pickup->ItemName, MakeInspectText(Pickup->ItemDescription, WeaponHintText));
+}
+
+void Asilent_planetPlayerController::ConfirmPickup()
+{
+	if (!InspectActor || !HeldPickup)
+	{
+		return;
+	}
+
+	AShooterPickup* Pickup = HeldPickup;
+	HeldPickup = nullptr;
+
+	// Закрываем осмотр // Close the inspection
+	FinishInspect();
+
+	// Пикап надо показать, иначе он решит, что уже подобран
+	// The pickup must be unhidden, otherwise it thinks it is already taken
+	Pickup->SetHeldState(false);
+
+	// Оружие переходит в руки персонажа // The weapon goes to the character's hands
+	Pickup->TryPickup(GetPawn());
 }
 
 void Asilent_planetPlayerController::EndInspect()
 {
-	// Esc: вернуть предмет на место // Esc: put the item back in place
+	// F / Esc: вернуть предмет или оружие на место // F / Esc: put the item or weapon back in place
 	CloseInspect(false);
 }
 
@@ -235,9 +296,18 @@ void Asilent_planetPlayerController::CloseInspect(bool bToInventory)
 		return;
 	}
 
-	// Убираем копию из рук // Remove the copy from hands
-	InspectActor->Destroy();
-	InspectActor = nullptr;
+	// Оружие в инвентарь не кладётся // A weapon can't go to the inventory
+	if (HeldPickup && bToInventory)
+	{
+		return;
+	}
+
+	// Оружие возвращается на стойку // The weapon goes back on the stand
+	if (HeldPickup)
+	{
+		HeldPickup->SetHeldState(false);
+		HeldPickup = nullptr;
+	}
 
 	if (HeldItem)
 	{
@@ -258,20 +328,7 @@ void Asilent_planetPlayerController::CloseInspect(bool bToInventory)
 		HeldItem = nullptr;
 	}
 
-	// Возвращаем управление персонажем // Give control back to the character
-	SetIgnoreMoveInput(false);
-	SetIgnoreLookInput(false);
-
-	if (UEnhancedInputLocalPlayerSubsystem* Sub =
-		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-	{
-		if (InspectMappingContext)
-		{
-			Sub->RemoveMappingContext(InspectMappingContext);
-		}
-	}
-
-	OnInspectEnded();
+	FinishInspect();
 }
 
 void Asilent_planetPlayerController::OnInspectInput(const FInputActionValue& Value)
@@ -286,7 +343,6 @@ void Asilent_planetPlayerController::OnZoomInput(const FInputActionValue& Value)
 {
 	if (InspectActor)
 	{
-		// Минус меняет направление зума // The minus flips the zoom direction
 		InspectActor->AddZoomInput(-Value.Get<float>());
 	}
 }

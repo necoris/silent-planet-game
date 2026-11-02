@@ -38,33 +38,62 @@ class SILENT_PLANET_API AShooterPickup : public AActor
 	GENERATED_BODY()
 
 	/** Collision sphere */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
 	USphereComponent* SphereCollision;
 
 	/** Weapon pickup mesh. Its mesh asset is set from the weapon data table */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
 	UStaticMeshComponent* Mesh;
-	
+
 protected:
 
 	/** Data on the type of picked weapon and visuals of this pickup */
-	UPROPERTY(EditAnywhere, Category="Pickup")
+	UPROPERTY(EditAnywhere, Category = "Pickup")
 	FDataTableRowHandle WeaponType;
 
 	/** Type to weapon to grant on pickup. Set from the weapon data table. */
 	TSubclassOf<AShooterWeapon> WeaponClass;
-	
+
+	// true = подбирать только на E, false = подбирать, наступив на предмет
+	// true = pick up only with E, false = pick up by walking over it
+	UPROPERTY(EditAnywhere, Category = "Pickup")
+	bool bPickupOnInteract = true;
+
+	// true = предмет появится снова через RespawnTime, false = исчезнет навсегда
+	// true = the pickup respawns after RespawnTime, false = it disappears forever
+	UPROPERTY(EditAnywhere, Category = "Pickup")
+	bool bRespawn = false;
+
 	/** Time to wait before respawning this pickup */
-	UPROPERTY(EditAnywhere, Category="Pickup", meta = (ClampMin = 0, ClampMax = 120, Units = "s"))
+	UPROPERTY(EditAnywhere, Category = "Pickup", meta = (ClampMin = 0, ClampMax = 120, Units = "s"))
 	float RespawnTime = 4.0f;
 
 	/** Timer to respawn the pickup */
 	FTimerHandle RespawnTimer;
 
-public:	
-	
+public:
+
 	/** Constructor */
 	AShooterPickup();
+
+	// Отдать оружие тому, кто подбирает (вызывается по E или при наступании)
+	// Give the weapon to whoever picks it up (called by E or by overlap)
+	bool TryPickup(AActor* Taker);
+
+	// Название и описание, которые покажутся при осмотре (задаются на каждом пикапе в редакторе)
+	// Name and description shown while inspecting (set per pickup in the editor)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pickup")
+	FText ItemName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pickup", meta = (MultiLine = true))
+	FText ItemDescription;
+
+	// Меш пикапа, нужен для осмотра // Pickup mesh, needed for inspecting
+	UStaticMeshComponent* GetPickupMesh() const { return Mesh; }
+
+	// Спрятать пикап, пока его осматривают, и вернуть на стойку
+	// Hide the pickup while it is inspected, and put it back on the stand
+	void SetHeldState(bool bHeld);
 
 protected:
 
@@ -87,10 +116,10 @@ protected:
 	void RespawnPickup();
 
 	/** Passes control to Blueprint to animate the pickup respawn. Should end by calling FinishRespawn */
-	UFUNCTION(BlueprintImplementableEvent, Category="Pickup", meta = (DisplayName = "OnRespawn"))
+	UFUNCTION(BlueprintImplementableEvent, Category = "Pickup", meta = (DisplayName = "OnRespawn"))
 	void BP_OnRespawn();
 
 	/** Enables this pickup after respawning */
-	UFUNCTION(BlueprintCallable, Category="Pickup")
+	UFUNCTION(BlueprintCallable, Category = "Pickup")
 	void FinishRespawn();
 };
