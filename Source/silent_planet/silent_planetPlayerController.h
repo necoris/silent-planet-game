@@ -13,6 +13,8 @@ class AInspectActor;
 class AInspectableItem;
 class AShooterPickup;
 class UStaticMeshComponent;
+class UInventoryComponent;
+class UInventoryWidget;
 struct FInputActionValue;
 
 UCLASS(abstract, config = "Game")
@@ -24,8 +26,8 @@ public:
 
 	Asilent_planetPlayerController();
 
-	// E: взять предмет, на который смотрим, или подтвердить оружие
-	// E: pick up the item we are looking at, or confirm a weapon
+	// E: взять предмет, на который смотрим, подтвердить оружие или осмотреть выбранное в инвентаре
+	// E: pick up the item we are looking at, confirm a weapon, or inspect the selection in the inventory
 	UFUNCTION(BlueprintCallable, Category = "Inspect")
 	void Interact();
 
@@ -37,10 +39,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Inspect")
 	void TakeToInventory();
 
-	// Идёт ли сейчас осмотр // Is an inspection in progress
-	bool IsInspecting() const { return InspectActor != nullptr; }
+	// Идёт ли осмотр или открыт инвентарь (тогда нельзя стрелять и менять позу)
+	// Is an inspection in progress or the inventory open (then no shooting or stance changes)
+	bool IsInspecting() const { return InspectActor != nullptr || bInventoryOpen; }
+
+	// Инвентарь игрока (для дверей, ключей и т.д.) // Player inventory (for doors, keys, etc.)
+	UFUNCTION(BlueprintPure, Category = "Inventory")
+	UInventoryComponent* GetInventory() const { return Inventory; }
 
 protected:
+
+	// Инвентарь игрока // Player inventory
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Inventory")
+	UInventoryComponent* Inventory;
 
 	// Расстояние от камеры до предмета при осмотре // Distance from camera to the item while inspecting
 	UPROPERTY(EditDefaultsOnly, Category = "Inspect")
@@ -57,6 +68,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Inspect")
 	FText WeaponHintText;
 
+	// Подсказка внизу при осмотре из инвентаря // Bottom hint when inspecting from the inventory
+	UPROPERTY(EditDefaultsOnly, Category = "Inventory")
+	FText InventoryInspectHintText;
+
 	// Предмет, который сейчас в руках // The item currently in hands
 	UPROPERTY()
 	AInspectableItem* HeldItem;
@@ -64,10 +79,6 @@ protected:
 	// Оружие, которое сейчас осматриваем // The weapon pickup being inspected
 	UPROPERTY()
 	AShooterPickup* HeldPickup;
-
-	// Что лежит в инвентаре (классы предметов) // What is in the inventory (item classes)
-	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
-	TArray<TSubclassOf<AInspectableItem>> InventoryItems;
 
 	// Создать копию в руках и включить ввод осмотра // Create the copy in hands and enable inspect input
 	bool BeginInspect(UStaticMeshComponent* SourceMesh);
@@ -85,6 +96,50 @@ protected:
 	// bToInventory = true: item goes to the inventory; false: it returns to its place
 	void CloseInspect(bool bToInventory);
 
+	// ---------- Инвентарь // Inventory ----------
+
+	void OpenInventory();
+	void CloseInventory();
+	void RefreshInventoryWidget();
+	void InspectSelectedInventoryItem();
+	void ReturnToInventoryList();
+
+	// Вызывается, когда содержимое инвентаря изменилось // Called when the inventory contents changed
+	UFUNCTION()
+	void HandleInventoryChanged();
+
+	// Какой виджет показывать как инвентарь // Which widget to show as the inventory
+	UPROPERTY(EditDefaultsOnly, Category = "Inventory")
+	TSubclassOf<UInventoryWidget> InventoryWidgetClass;
+
+	// Открыть/закрыть инвентарь (Tab) // Open/close the inventory (Tab)
+	UPROPERTY(EditDefaultsOnly, Category = "Inventory")
+	UInputAction* InventoryAction;
+
+	// Выбор строки в списке (вверх/вниз), Digital не подойдёт: нужен Axis1D
+	// Selecting a row in the list (up/down), needs an Axis1D action
+	UPROPERTY(EditDefaultsOnly, Category = "Inventory")
+	UInputAction* InventoryNavigateAction;
+
+	UPROPERTY()
+	UInventoryWidget* InventoryWidget;
+
+	bool bInventoryOpen = false;
+	bool bInspectingFromInventory = false;
+	int32 SelectedIndex = 0;
+
+	void OnInventoryPressed();
+	void OnInventoryNavigate(const FInputActionValue& Value);
+
+	// Реализуется в Blueprint: предмет положен в инвентарь (например, показать "Предмет добавлен")
+	// Implemented in Blueprint: the item was put into the inventory (for example show "Item added")
+	UFUNCTION(BlueprintImplementableEvent, Category = "Inspect")
+	void OnItemTakenToInventory(const FText& ItemName);
+
+	// Реализуется в Blueprint: инвентарь полон // Implemented in Blueprint: the inventory is full
+	UFUNCTION(BlueprintImplementableEvent, Category = "Inventory")
+	void OnInventoryFull(const FText& ItemName);
+
 	// Реализуется в Blueprint: показать/убрать надпись внизу
 	// Implemented in Blueprint: show/hide the text at the bottom
 	UFUNCTION(BlueprintImplementableEvent, Category = "Inspect")
@@ -92,11 +147,6 @@ protected:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Inspect")
 	void OnInspectEnded();
-
-	// Вызывается, когда предмет попал в инвентарь (можно показать "Предмет добавлен")
-	// Called when an item went into the inventory (can show "Item added")
-	UFUNCTION(BlueprintImplementableEvent, Category = "Inspect")
-	void OnItemTakenToInventory(const FText& ItemName);
 
 	UPROPERTY(EditAnywhere, Category = "Input|Input Mappings")
 	TArray<UInputMappingContext*> DefaultMappingContexts;

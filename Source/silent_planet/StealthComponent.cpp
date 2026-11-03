@@ -37,7 +37,9 @@ void UStealthComponent::BeginPlay()
 	UCharacterMovementComponent* CMC = OwnerChar->GetCharacterMovement();
 	CMC->NavAgentProps.bCanCrouch = true;
 	CMC->bCrouchMaintainsBaseLocation = true;
-	CMC->CrouchedHalfHeight = CrouchHalfHeight;
+	// Было: CMC->CrouchedHalfHeight = CrouchHalfHeight;
+	// Новый способ задать высоту капсулы в приседе // New way to set the crouched capsule height
+	CMC->SetCrouchedHalfHeight(CrouchHalfHeight);
 	CMC->MaxWalkSpeedCrouched = CrouchSpeed;
 
 	// Лёжа капсула не может быть ниже своего радиуса
@@ -157,7 +159,9 @@ void UStealthComponent::SetStance(EStealthStance NewStance)
 	// Задаём высоту и скорость выбранной позы
 	// Set the height and speed of the chosen stance
 	const bool bProne = (NewStance == EStealthStance::Prone);
-	CMC->CrouchedHalfHeight = bProne ? ProneHalfHeight : CrouchHalfHeight;
+	// Было: CMC->CrouchedHalfHeight = bProne ? ProneHalfHeight : CrouchHalfHeight;
+	// Высота капсулы выбранной позы // Capsule height of the chosen stance
+	CMC->SetCrouchedHalfHeight(bProne ? ProneHalfHeight : CrouchHalfHeight);
 	CMC->MaxWalkSpeedCrouched = bProne ? ProneSpeed : CrouchSpeed;
 
 	if (OwnerChar->bIsCrouched)

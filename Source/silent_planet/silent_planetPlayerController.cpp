@@ -17,6 +17,8 @@
 #include "Widgets/Input/SVirtualJoystick.h"
 #include "InspectableItem.h"
 #include "ShooterPickup.h"
+#include "InventoryComponent.h"
+#include "InventoryWidget.h"
 #include "Components/StaticMeshComponent.h"
 
 // Склеить описание и подсказку в один текст // Join the description and the hint into one text
@@ -30,16 +32,25 @@ Asilent_planetPlayerController::Asilent_planetPlayerController()
 	// set the player camera manager class
 	PlayerCameraManagerClass = Asilent_planetCameraManager::StaticClass();
 
-	// Подсказки по умолчанию, свои текст задаётся в редакторе
+	// Инвентарь игрока // Player inventory
+	Inventory = CreateDefaultSubobject<UInventoryComponent>(TEXT("Inventory"));
+
+	// Подсказки по умолчанию, свой текст задаётся в редакторе
 	// Default hints, set your own text in the editor
 	ItemHintText = INVTEXT("[I] Put in inventory   [F] Put back");
 	WeaponHintText = INVTEXT("[E] Take in hands   [F] Put back");
+	InventoryInspectHintText = INVTEXT("[F] Back");
 }
 
 void Asilent_planetPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Следим за изменениями инвентаря // Watch for inventory changes
+	if (Inventory)
+	{
+		Inventory->OnInventoryChanged.AddDynamic(this, &Asilent_planetPlayerController::HandleInventoryChanged);
+	}
 
 	// only spawn touch controls on local player controllers
 	if (IsLocalPlayerController() && ShouldUseTouchControls())
@@ -87,7 +98,7 @@ void Asilent_planetPlayerController::SetupInputComponent()
 			}
 		}
 
-		// Привязка ввода для осмотра предметов // Input bindings for item inspection
+		// Привязка ввода для осмотра предметов и инвентаря // Input bindings for item inspection and the inventory
 		if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent))
 		{
 			if (InspectAction)
@@ -107,6 +118,15 @@ void Asilent_planetPlayerController::SetupInputComponent()
 			{
 				EIC->BindAction(CancelAction, ETriggerEvent::Started, this, &Asilent_planetPlayerController::OnCancelPressed);
 			}
+			// Инвентарь: открыть/закрыть и выбор строки // Inventory: open/close and row selection
+			if (InventoryAction)
+			{
+				EIC->BindAction(InventoryAction, ETriggerEvent::Started, this, &Asilent_planetPlayerController::OnInventoryPressed);
+			}
+			if (InventoryNavigateAction)
+			{
+				EIC->BindAction(InventoryNavigateAction, ETriggerEvent::Started, this, &Asilent_planetPlayerController::OnInventoryNavigate);
+			}
 		}
 	}
 
@@ -120,6 +140,16 @@ bool Asilent_planetPlayerController::ShouldUseTouchControls() const
 
 void Asilent_planetPlayerController::Interact()
 {
+	// Инвентарь открыт: E осматривает выбранный предмет // Inventory is open: E inspects the selected item
+	if (bInventoryOpen)
+	{
+		if (!InspectActor)
+		{
+			InspectSelectedInventoryItem();
+		}
+		return;
+	}
+
 	// Уже осматриваем: E подтверждает только оружие, обычные предметы не трогает
 	// Already inspecting: E only confirms a weapon, regular items are not affected
 	if (InspectActor)
@@ -286,6 +316,14 @@ void Asilent_planetPlayerController::OnTakePressed()
 
 void Asilent_planetPlayerController::OnCancelPressed()
 {
+	// Инвентарь открыт, а предмет не осматриваем: F закрывает инвентарь
+	// The inventory is open and nothing is inspected: F closes the inventory
+	if (bInventoryOpen && !InspectActor)
+	{
+		CloseInventory();
+		return;
+	}
+
 	EndInspect();
 }
 
@@ -293,6 +331,13 @@ void Asilent_planetPlayerController::CloseInspect(bool bToInventory)
 {
 	if (!InspectActor)
 	{
+		return;
+	}
+
+	// Осмотр из инвентаря: F или I возвращают к списку // Inspecting from the inventory: F or I go back to the list
+	if (bInspectingFromInventory)
+	{
+		ReturnToInventoryList();
 		return;
 	}
 
@@ -313,11 +358,19 @@ void Asilent_planetPlayerController::CloseInspect(bool bToInventory)
 	{
 		if (bToInventory)
 		{
-			// Запоминаем в инвентаре и убираем предмет из мира
-			// Store it in the inventory and remove the item from the world
-			InventoryItems.Add(HeldItem->GetClass());
-			OnItemTakenToInventory(HeldItem->ItemName);
-			HeldItem->Destroy();
+			// Кладём в инвентарь и убираем предмет из мира
+			// Put it into the inventory and remove the item from the world
+			if (Inventory && Inventory->AddItem(HeldItem->GetClass(), HeldItem->Quantity))
+			{
+				OnItemTakenToInventory(HeldItem->ItemName);
+				HeldItem->Destroy();
+			}
+			else
+			{
+				// Инвентарь полон: предмет остаётся в руках // The inventory is full: the item stays in hands
+				OnInventoryFull(HeldItem->ItemName);
+				return;
+			}
 		}
 		else
 		{
@@ -329,6 +382,172 @@ void Asilent_planetPlayerController::CloseInspect(bool bToInventory)
 	}
 
 	FinishInspect();
+}
+
+// ---------- Инвентарь // Inventory ----------
+
+void Asilent_planetPlayerController::OnInventoryPressed()
+{
+	if (bInventoryOpen)
+	{
+		if (InspectActor)
+		{
+			// Осматриваем предмет из списка: Tab возвращает к списку
+			// Inspecting a list item: Tab goes back to the list
+			if (bInspectingFromInventory)
+			{
+				ReturnToInventoryList();
+			}
+		}
+		else
+		{
+			CloseInventory();
+		}
+		return;
+	}
+
+	// Во время обычного осмотра инвентарь не открываем // Don't open the inventory during a regular inspection
+	if (!InspectActor)
+	{
+		OpenInventory();
+	}
+}
+
+void Asilent_planetPlayerController::OnInventoryNavigate(const FInputActionValue& Value)
+{
+	if (!bInventoryOpen || InspectActor || !Inventory)
+	{
+		return;
+	}
+
+	const int32 Count = Inventory->GetItems().Num();
+	if (Count == 0)
+	{
+		return;
+	}
+
+	// Вверх даёт +1, вниз даёт -1 (Negate в Input Mapping Context)
+	// Up gives +1, down gives -1 (Negate in the Input Mapping Context)
+	const int32 Step = Value.Get<float>() > 0.f ? -1 : 1;
+
+	// Переход по кругу // Wrap around
+	SelectedIndex = (SelectedIndex + Step + Count) % Count;
+	RefreshInventoryWidget();
+}
+
+void Asilent_planetPlayerController::OpenInventory()
+{
+	if (bInventoryOpen || InspectActor || !InventoryWidgetClass)
+	{
+		return;
+	}
+
+	InventoryWidget = CreateWidget<UInventoryWidget>(this, InventoryWidgetClass);
+	if (!InventoryWidget)
+	{
+		return;
+	}
+	InventoryWidget->AddToViewport();
+
+	bInventoryOpen = true;
+	SelectedIndex = 0;
+
+	// Пока инвентарь открыт, персонаж стоит // The character stands still while the inventory is open
+	SetIgnoreMoveInput(true);
+	SetIgnoreLookInput(true);
+
+	RefreshInventoryWidget();
+}
+
+void Asilent_planetPlayerController::CloseInventory()
+{
+	if (!bInventoryOpen)
+	{
+		return;
+	}
+
+	// Если смотрели предмет из списка, сначала возвращаемся к списку
+	// If an item from the list was being inspected, return to the list first
+	if (InspectActor && bInspectingFromInventory)
+	{
+		ReturnToInventoryList();
+	}
+
+	if (InventoryWidget)
+	{
+		InventoryWidget->RemoveFromParent();
+		InventoryWidget = nullptr;
+	}
+
+	bInventoryOpen = false;
+
+	SetIgnoreMoveInput(false);
+	SetIgnoreLookInput(false);
+}
+
+void Asilent_planetPlayerController::RefreshInventoryWidget()
+{
+	if (!InventoryWidget || !Inventory)
+	{
+		return;
+	}
+
+	// Не даём выбору выйти за пределы списка // Keep the selection inside the list
+	const int32 Count = Inventory->GetItems().Num();
+	SelectedIndex = (Count > 0) ? FMath::Clamp(SelectedIndex, 0, Count - 1) : 0;
+
+	InventoryWidget->Refresh(Inventory->GetItems(), SelectedIndex);
+}
+
+void Asilent_planetPlayerController::InspectSelectedInventoryItem()
+{
+	if (!Inventory || !bInventoryOpen || InspectActor)
+	{
+		return;
+	}
+
+	const TArray<FInventoryEntry>& Items = Inventory->GetItems();
+	if (!Items.IsValidIndex(SelectedIndex) || Items[SelectedIndex].ItemClass.Get() == nullptr)
+	{
+		return;
+	}
+
+	// Берём меш и текст из настроек класса предмета // Take the mesh and text from the item class defaults
+	const AInspectableItem* Def = GetDefault<AInspectableItem>(Items[SelectedIndex].ItemClass.Get());
+	if (!Def || !BeginInspect(Def->Mesh))
+	{
+		return;
+	}
+
+	bInspectingFromInventory = true;
+
+	// Прячем список, пока предмет в руках // Hide the list while the item is in hands
+	if (InventoryWidget)
+	{
+		InventoryWidget->SetVisibility(ESlateVisibility::Hidden);
+	}
+
+	OnInspectStarted(Def->ItemName, MakeInspectText(Def->ItemDescription, InventoryInspectHintText));
+}
+
+void Asilent_planetPlayerController::ReturnToInventoryList()
+{
+	bInspectingFromInventory = false;
+
+	// Убираем копию из рук и подпись внизу // Remove the copy from hands and the bottom text
+	FinishInspect();
+
+	// Показываем список обратно // Show the list again
+	if (InventoryWidget)
+	{
+		InventoryWidget->SetVisibility(ESlateVisibility::Visible);
+	}
+	RefreshInventoryWidget();
+}
+
+void Asilent_planetPlayerController::HandleInventoryChanged()
+{
+	RefreshInventoryWidget();
 }
 
 void Asilent_planetPlayerController::OnInspectInput(const FInputActionValue& Value)
