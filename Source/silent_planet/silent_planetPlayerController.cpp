@@ -20,6 +20,8 @@
 #include "InventoryComponent.h"
 #include "InventoryWidget.h"
 #include "Components/StaticMeshComponent.h"
+#include "InteractableInterface.h"
+#include "InteractPromptWidget.h"
 
 // Склеить описание и подсказку в один текст // Join the description and the hint into one text
 static FText MakeInspectText(const FText& Description, const FText& Hint)
@@ -40,11 +42,24 @@ Asilent_planetPlayerController::Asilent_planetPlayerController()
 	ItemHintText = INVTEXT("[I] Put in inventory   [F] Put back");
 	WeaponHintText = INVTEXT("[E] Take in hands   [F] Put back");
 	InventoryInspectHintText = INVTEXT("[F] Back");
+	ItemPromptText = INVTEXT("Examine");
+	WeaponPromptText = INVTEXT("Examine weapon");
 }
 
 void Asilent_planetPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Создаём виджет подсказки, пока скрытый // Create the prompt widget, hidden for now
+	if (IsLocalPlayerController() && PromptWidgetClass)
+	{
+		PromptWidget = CreateWidget<UInteractPromptWidget>(this, PromptWidgetClass);
+		if (PromptWidget)
+		{
+			PromptWidget->AddToViewport();
+			PromptWidget->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
 
 	// Следим за изменениями инвентаря // Watch for inventory changes
 	if (Inventory)
@@ -161,6 +176,32 @@ void Asilent_planetPlayerController::Interact()
 		return;
 	}
 
+	AActor* HitActor = TraceInteractTarget();
+	if (!HitActor)
+	{
+		return;
+	}
+
+	if (AInspectableItem* Item = Cast<AInspectableItem>(HitActor))
+	{
+		// Предмет для осмотра // Item to inspect
+		StartInspectItem(Item);
+	}
+	else if (AShooterPickup* Pickup = Cast<AShooterPickup>(HitActor))
+	{
+		// Оружие на стойке: сначала осматриваем // Weapon on a stand: inspect it first
+		StartInspectPickup(Pickup);
+	}
+	else if (HitActor->GetClass()->ImplementsInterface(UInteractableInterface::StaticClass()))
+	{
+		// Любой Blueprint-актор с интерфейсом: панель, щиток, дверь...
+		// Any Blueprint actor with the interface: panel, fuse box, door...
+		IInteractableInterface::Execute_OnInteract(HitActor, GetPawn());
+	}
+}
+
+AActor* Asilent_planetPlayerController::TraceInteractTarget() const
+{
 	FVector Loc;
 	FRotator Rot;
 	GetPlayerViewPoint(Loc, Rot);
@@ -171,19 +212,73 @@ void Asilent_planetPlayerController::Interact()
 
 	if (GetWorld()->LineTraceSingleByChannel(Hit, Loc, Loc + Rot.Vector() * InteractDistance, ECC_Visibility, Params))
 	{
-		AActor* HitActor = Hit.GetActor();
-
-		if (AInspectableItem* Item = Cast<AInspectableItem>(HitActor))
-		{
-			// Предмет для осмотра // Item to inspect
-			StartInspectItem(Item);
-		}
-		else if (AShooterPickup* Pickup = Cast<AShooterPickup>(HitActor))
-		{
-			// Оружие на стойке: сначала осматриваем // Weapon on a stand: inspect it first
-			StartInspectPickup(Pickup);
-		}
+		return Hit.GetActor();
 	}
+	return nullptr;
+}
+
+FText Asilent_planetPlayerController::GetPromptFor(AActor* Target) const
+{
+	if (!Target)
+	{
+		return FText::GetEmpty();
+	}
+
+	if (const AInspectableItem* Item = Cast<AInspectableItem>(Target))
+	{
+		return FText::Format(INVTEXT("[E] {0}: {1}"), ItemPromptText, Item->ItemName);
+	}
+
+	if (const AShooterPickup* Pickup = Cast<AShooterPickup>(Target))
+	{
+		return FText::Format(INVTEXT("[E] {0}: {1}"), WeaponPromptText, Pickup->ItemName);
+	}
+
+	if (Target->GetClass()->ImplementsInterface(UInteractableInterface::StaticClass()))
+	{
+		// Текст подсказки задаёт сам Blueprint-актор // The Blueprint actor provides the prompt text
+		const FText Text = IInteractableInterface::Execute_GetInteractionText(Target);
+		return Text.IsEmpty() ? FText::GetEmpty() : FText::Format(INVTEXT("[E] {0}"), Text);
+	}
+
+	return FText::GetEmpty();
+}
+
+void Asilent_planetPlayerController::UpdateInteractPrompt()
+{
+	if (!PromptWidget)
+	{
+		return;
+	}
+
+	// Во время осмотра и в инвентаре подсказка не нужна // No prompt while inspecting or in the inventory
+	FText Prompt = FText::GetEmpty();
+	if (!IsInspecting())
+	{
+		Prompt = GetPromptFor(TraceInteractTarget());
+	}
+
+	if (Prompt.IsEmpty())
+	{
+		PromptWidget->SetVisibility(ESlateVisibility::Collapsed);
+		CurrentPrompt = FText::GetEmpty();
+		return;
+	}
+
+	// Текст обновляем только если он изменился // Update the text only when it changed
+	if (!Prompt.EqualTo(CurrentPrompt))
+	{
+		PromptWidget->SetPrompt(Prompt);
+		CurrentPrompt = Prompt;
+	}
+	PromptWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
+void Asilent_planetPlayerController::PlayerTick(float DeltaTime)
+{
+	Super::PlayerTick(DeltaTime);
+
+	UpdateInteractPrompt();
 }
 
 bool Asilent_planetPlayerController::BeginInspect(UStaticMeshComponent* SourceMesh)

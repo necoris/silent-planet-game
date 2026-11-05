@@ -15,6 +15,7 @@ class AShooterPickup;
 class UStaticMeshComponent;
 class UInventoryComponent;
 class UInventoryWidget;
+class UInteractPromptWidget;
 struct FInputActionValue;
 
 UCLASS(abstract, config = "Game")
@@ -192,6 +193,37 @@ protected:
 	void OnZoomInput(const FInputActionValue& Value);
 	void OnTakePressed();
 	void OnCancelPressed();
+
+	// ---------- Подсказка "[E] ..." // The "[E] ..." prompt ----------
+
+// Какой виджет показывать как подсказку // Which widget to show as the prompt
+	UPROPERTY(EditDefaultsOnly, Category = "Interaction")
+	TSubclassOf<UInteractPromptWidget> PromptWidgetClass;
+
+	// Слово в подсказке для предметов: "[E] Осмотреть: Ключ" // Word in the prompt for items: "[E] Examine: Key"
+	UPROPERTY(EditDefaultsOnly, Category = "Interaction")
+	FText ItemPromptText;
+
+	// Слово в подсказке для оружия // Word in the prompt for weapons
+	UPROPERTY(EditDefaultsOnly, Category = "Interaction")
+	FText WeaponPromptText;
+
+	UPROPERTY()
+	UInteractPromptWidget* PromptWidget;
+
+	// Текст, который показан сейчас // The text shown right now
+	FText CurrentPrompt;
+
+	// Что у нас под прицелом // What is under the crosshair
+	AActor* TraceInteractTarget() const;
+
+	// Какую подсказку показать для этого объекта // Which prompt to show for this object
+	FText GetPromptFor(AActor* Target) const;
+
+	// Обновить подсказку каждый кадр // Update the prompt every frame
+	void UpdateInteractPrompt();
+
+	virtual void PlayerTick(float DeltaTime) override;
 
 	// --------------------------------------
 
